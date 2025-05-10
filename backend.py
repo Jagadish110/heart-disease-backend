@@ -33,7 +33,9 @@ class PredictionInput(BaseModel):
     thal: int
 
 # Load the trained model
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "heart_disease_model.pkl")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "heart_webpage.pkl")
+
 try:
     with open(MODEL_PATH, "rb") as f:
         model = pickle.load(f)
