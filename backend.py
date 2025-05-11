@@ -1,29 +1,41 @@
-import os
-import pickle
-from fastapi import FastAPI, HTTPException
-from asgiref.wsgi import WsgiToAsgi
+# backend.py
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+import joblib
+import numpy as np
 
 app = FastAPI()
 
-# Dynamic model path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "models", "heart_webpage.pkl")
-
-# Debug: Print the model path
-print(f"Attempting to load model from: {MODEL_PATH}")
+# Define input schema
+class HeartData(BaseModel):
+    age: int
+    sex: int
+    cp: int
+    trestbps: int
+    chol: int
+    fbs: int
+    restecg: int
+    thalach: int
+    exang: int
+    oldpeak: float
+    slope: int
+    ca: int
+    thal: int
 
 # Load model
-try:
-    with open(MODEL_PATH, "rb") as f:
-        model = pickle.load(f)
-    print("Model loaded successfully")
-except FileNotFoundError as e:
-    print(f"Error: Model file not found at {MODEL_PATH}")
-    raise Exception(f"Model file not found at {MODEL_PATH}")
+model = joblib.load("models/heart_webpage.pkl")  # Make sure model.pkl is present in root folder
 
 @app.get("/")
-async def root():
+def read_root():
     return {"message": "Model loaded successfully!"}
 
-# Wrap FastAPI app for WSGI servers (e.g., waitress on Windows)
-wsgi_app = WsgiToAsgi(app)
+@app.post("/predict")
+def predict(data: HeartData):
+    input_array = np.array([[
+        data.age, data.sex, data.cp, data.trestbps, data.chol,
+        data.fbs, data.restecg, data.thalach, data.exang,
+        data.oldpeak, data.slope, data.ca, data.thal
+    ]])
+    prediction = model.predict(input_array)
+    return {"prediction": int(prediction[0])}
