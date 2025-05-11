@@ -1,19 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-import numpy as np
 import pickle
 import os
-
-# Load the model and scaler
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models\heart_webpage.pkl")
-SCALER_PATH = os.path.join(os.path.dirname(__file__), "scaler.pkl")
-
-with open(MODEL_PATH, "rb") as f:
-    model = pickle.load(f)
+import numpy as np
 
 app = FastAPI()
 
-# Define the input data model
+# Define request schema
 class HeartData(BaseModel):
     age: int
     sex: int
@@ -29,15 +22,27 @@ class HeartData(BaseModel):
     ca: int
     thal: int
 
+# Load model and scaler
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "models", "heart_webpage.pkl")
+SCALER_PATH = os.path.join(BASE_DIR, "models", "scaler.pkl")
+
+try:
+    with open(MODEL_PATH, "rb") as f:
+        model = pickle.load(f)
+    with open(SCALER_PATH, "rb") as f:
+        scaler = pickle.load(f)
+except FileNotFoundError as e:
+    raise RuntimeError(f"Required file not found: {e}")
+
 @app.post("/predict")
 def predict(data: HeartData):
-    features = np.array([[ 
-        data.age, data.sex, data.cp, data.trestbps, data.chol,
-        data.fbs, data.restecg, data.thalach, data.exang,
-        data.oldpeak, data.slope, data.ca, data.thal
-    ]])
-    
-    scaled = MODEL_PATH.transform(features)
-    prediction = model.predict(scaled)[0]
-    result = " Heart Disease" if prediction == 1 else "No Heart Disease"
-    return {"prediction": result}
+    try:
+        input_data = np.array([[data.age, data.sex, data.cp, data.trestbps, data.chol,
+                                data.fbs, data.restecg, data.thalach, data.exang,
+                                data.oldpeak, data.slope, data.ca, data.thal]])
+        input_scaled = scaler.transform(input_data)
+        prediction = model.predict(input_scaled)[0]
+        return {"prediction": int(prediction)}  # 1 = Heart Disease, 0 = No Disease
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
