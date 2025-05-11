@@ -1,65 +1,91 @@
-# app.py
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-import numpy as np
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import pickle
+import numpy as np
 import os
+import boto3
+import logging
 
-# Load the model and scaler
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "heart_webpage.pkl")
-SCALER_PATH = os.path.join(os.path.dirname(__file__), "models", "scaler.pkl")
-
-try:
-    with open(MODEL_PATH, "rb") as f:
-        model = pickle.load(f)
-    with open(SCALER_PATH, "rb") as f:
-        scaler = pickle.load(f)
-except FileNotFoundError as e:
-    raise Exception(f"Model or scaler file not found: {e}")
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# Define the input data model with validation
-class HeartData(BaseModel):
-    age: int = Field(..., ge=0, le=120, description="Age in years")
-    sex: int = Field(..., ge=0, le=1, description="Sex (0=Female, 1=Male)")
-    cp: int = Field(..., ge=0, le=3, description="Chest pain type (0-3)")
-    trestbps: int = Field(..., ge=0, le=300, description="Resting blood pressure (mm Hg)")
-    chol: int = Field(..., ge=0, le=600, description="Serum cholesterol (mg/dl)")
-    fbs: int = Field(..., ge=0, le=1, description="Fasting blood sugar > 120 mg/dl (0/1)")
-    restecg: int = Field(..., ge=0, le=2, description="Resting ECG results (0-2)")
-    thalach: int = Field(..., ge=0, le=220, description="Maximum heart rate achieved")
-    exang: int = Field(..., ge=0, le=1, description="Exercise-induced angina (0/1)")
-    oldpeak: float = Field(..., ge=0.0, le=10.0, description="ST depression induced by exercise")
-    slope: int = Field(..., ge=0, le=2, description="Slope of peak exercise ST segment (0-2)")
-    ca: int = Field(..., ge=0, le=3, description="Number of major vessels (0-3)")
-    thal: int = Field(..., ge=0, le=3, description="Thalassemia (0-3)")
+# Configure CORS to allow requests from Streamlit app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Update with your Streamlit URL after deployment, e.g., ["https://heart-disease-frontend.onrender.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+# Define input model for heart disease features
+class PredictionInput(BaseModel):
+    age: int
+    sex: int
+    cp: int
+    trestbps: int
+    chol: int
+    fbs: int
+    restecg: int
+    thalach: int
+    exang: int
+    oldpeak: float
+    slope: int
+    ca: int
+    thal: int
+
+# Load the trained model and scaler
+MODEL_PATH = "/tmp/heart_disease_model.pkl" if os.getenv("AWS_S3_BUCKET") else os.path.join(os.path.dirname(__file__), "models", "heart_disease_model.pkl")
+SCALER_PATH = "/tmp/scaler.pkl" if os.getenv("AWS_S3_BUCKET") else os.path.join(os.path.dirname(__file__), "models", "scaler.pkl")
+
+try:
+    if os.getenv("AWS_S3_BUCKET"):
+        logger.info("Downloading model and scaler from S3...")
+        s3 = boto3.client(
+            "s3",
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_KEY")
+        )
+        s3.download_file(os.getenv("AWS_S3_BUCKET"), "heart_disease_model.pkl", MODEL_PATH)
+        s3.download_file(os.getenv("AWS_S3_BUCKET"), "scaler.pkl", SCALER_PATH)
+    
+    # Load model
+    with open(MODEL_PATH, "rb") as f:
+        model = pickle.load(f)
+    # Load scaler
+    with open(SCALER_PATH, "rb") as f:
+        scaler = pickle.load(f)
+except FileNotFoundError as e:
+    logger.error(f"Model or scaler file not found: {e}")
+    raise Exception(f"Model or scaler file not found: {e}")
+except Exception as e:
+    logger.error(f"Error loading model or scaler: {str(e)}")
+    raise Exception(f"Error loading model or scaler: {str(e)}")
+
+# Prediction endpoint
 @app.post("/predict")
-async def predict(data: HeartData):
+async def predict(data: PredictionInput):
     try:
-        # Convert input data to numpy array
-        features = np.array([[
-            data.age, data.sex, data.cp, data.trestbps, data.chol,
-            data.fbs, data.restecg, data.thalach, data.exang,
-            data.oldpeak, data.slope, data.ca, data.thal
+        # Convert input to numpy array
+        input_data = np.array([[
+            data.age, data.sex, data.cp, data.trestbps, data.chol, data.fbs,
+            data.restecg, data.thalach, data.exang, data.oldpeak, data.slope,
+            data.ca, data.thal
         ]])
-        
-        # Scale features
-        scaled_features = scaler.transform(features)
-        
+        # Scale the input data
+        input_data_scaled = scaler.transform(input_data)
         # Make prediction
-        prediction = model.predict(scaled_features)[0]
-        result = "Heart Disease" if prediction == 1 else "No Heart Disease"
-        
-        return {
-            "prediction": int(prediction),
-            "result": result
-        }
+        prediction = model.predict(input_data_scaled)[0]
+        return {"prediction": int(prediction)}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}")
+        logger.error(f"Prediction error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Prediction error: {str(e)}")
 
 # Health check endpoint
-@app.get("/")
-async def root():
-    return {"message": "Heart Disease Prediction API is running"}
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
